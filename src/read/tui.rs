@@ -1430,12 +1430,20 @@ fn render_footer(
             "PROJECT_INDEX {}/{}",
             snapshot.sessions_scanned, snapshot.sessions_total
         )
-    } else if state
+    } else if let Some(snapshot) = state
         .discovery
         .as_ref()
-        .is_some_and(|snapshot| snapshot.truncated)
+        .filter(|snapshot| snapshot.truncated)
     {
-        "FULL SCAN REACHED DIRECTORY LIMIT".to_string()
+        if snapshot.directories_scanned > 0 {
+            format!(
+                "FULL SCAN LIMIT REACHED ({} DIRS, {} PROJECTS)",
+                formatter.format_usize(snapshot.directories_scanned),
+                formatter.format_usize(snapshot.checkouts.len())
+            )
+        } else {
+            "FULL SCAN LIMIT REACHED".to_string()
+        }
     } else if state.project_mode == ProjectViewMode::Deep {
         format!("DEEP depth {}", state.deep_depth)
     } else {

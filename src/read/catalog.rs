@@ -157,6 +157,13 @@ struct CachedEvidence {
     evidence: Vec<PathEvidence>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct CatalogSaveMeta {
+    updated_at: i64,
+    truncated: bool,
+    directories_scanned: usize,
+}
+
 pub(crate) fn scan_project_catalog<F>(
     config: &CatalogScanConfig,
     strict: &Catalog,
@@ -239,7 +246,14 @@ where
             noisy: checkout.source_flags & SOURCE_NOISY_TREE != 0,
         })
         .collect();
-    scan_catalog_evidence(config, strict, discovered, 0, snapshot.truncated, progress)
+    scan_catalog_evidence(
+        config,
+        strict,
+        discovered,
+        snapshot.directories_scanned,
+        snapshot.truncated,
+        progress,
+    )
 }
 
 fn scan_catalog_evidence<F>(
@@ -401,8 +415,11 @@ where
         &checkouts,
         &links,
         &evidence_updates,
-        now,
-        truncated,
+        CatalogSaveMeta {
+            updated_at: now,
+            truncated,
+            directories_scanned: directory_count,
+        },
     )?;
 
     load_catalog_cache_from_connection(&connection).map(|mut snapshot| {
@@ -1020,8 +1037,7 @@ fn save_catalog_cache(
     checkouts: &[ProjectCheckout],
     links: &[SessionProjectLink],
     evidence_by_session: &BTreeMap<String, (u64, i64, Vec<PathEvidence>)>,
-    now: i64,
-    truncated: bool,
+    meta: CatalogSaveMeta,
 ) -> Result<()> {
     let tx = connection.transaction()?;
     for checkout in checkouts {
@@ -1069,7 +1085,7 @@ fn save_catalog_cache(
                 i64::from(link.evidence_mask),
                 i64::try_from(link.evidence_count).unwrap_or(i64::MAX),
                 i64::from(link.confidence),
-                now,
+                meta.updated_at,
             ],
         )?;
     }
@@ -1092,7 +1108,7 @@ fn save_catalog_cache(
                 i64::try_from(*file_size).unwrap_or(i64::MAX),
                 file_mtime_ms,
                 encoded,
-                now,
+                meta.updated_at,
             ],
         )?;
     }
@@ -1103,18 +1119,27 @@ fn save_catalog_cache(
              ON CONFLICT(root_path) DO UPDATE SET
                 max_depth = excluded.max_depth,
                 last_scan = excluded.last_scan",
-            params![root.to_string_lossy(), i64::from(config.max_depth), now],
+            params![
+                root.to_string_lossy(),
+                i64::from(config.max_depth),
+                meta.updated_at
+            ],
         )?;
     }
     tx.execute(
         "INSERT INTO catalog_meta(key, value) VALUES('updated_at', ?1)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        [now.to_string()],
+        [meta.updated_at.to_string()],
     )?;
     tx.execute(
         "INSERT INTO catalog_meta(key, value) VALUES('truncated', ?1)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        [if truncated { "1" } else { "0" }],
+        [if meta.truncated { "1" } else { "0" }],
+    )?;
+    tx.execute(
+        "INSERT INTO catalog_meta(key, value) VALUES('directories_scanned', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [meta.directories_scanned.to_string()],
     )?;
     tx.commit()?;
     Ok(())
@@ -1180,6 +1205,15 @@ fn load_catalog_cache_from_connection(connection: &Connection) -> Result<Catalog
         )
         .optional()?
         .is_some_and(|value| value == "1");
+    let directories_scanned = connection
+        .query_row(
+            "SELECT value FROM catalog_meta WHERE key = 'directories_scanned'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
     let checkouts = checkouts
         .into_iter()
         .map(|mut checkout| {
@@ -1192,6 +1226,7 @@ fn load_catalog_cache_from_connection(connection: &Connection) -> Result<Catalog
         links,
         updated_at,
         truncated,
+        directories_scanned,
         ..CatalogSnapshot::default()
     })
 }
