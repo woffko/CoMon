@@ -855,8 +855,8 @@ fn header_line_area(area: Rect) -> Rect {
 
 pub(crate) fn history_style_controls_area(area: Rect) -> Rect {
     let line = header_line_area(area);
-    let width = if line.width >= 68 {
-        68
+    let width = if line.width >= 67 {
+        67
     } else if line.width >= 30 {
         30
     } else {
@@ -875,7 +875,7 @@ pub(crate) fn history_style_controls_area(area: Rect) -> Rect {
 
 pub(crate) fn history_depth_controls_area(area: Rect) -> Rect {
     let controls = history_style_controls_area(area);
-    if controls.width < 68 {
+    if controls.width < 67 {
         return Rect::default();
     }
     Rect {
@@ -1554,11 +1554,11 @@ mod tests {
     fn history_style_controls_use_right_side_of_header_line() {
         assert_eq!(
             history_style_controls_area(Rect::new(2, 1, 100, 3)),
-            Rect::new(34, 2, 68, 1)
+            Rect::new(35, 2, 67, 1)
         );
         assert_eq!(
             history_depth_controls_area(Rect::new(2, 1, 100, 3)),
-            Rect::new(52, 3, 16, 1)
+            Rect::new(53, 3, 16, 1)
         );
         assert_eq!(
             history_style_controls_area(Rect::new(2, 1, 20, 3)),

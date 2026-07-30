@@ -2756,7 +2756,7 @@ fn render_history_style_controls(frame: &mut Frame<'_>, area: Rect, state: &mut 
     }
     use crate::read::catalog::ProjectViewMode;
     let mode = state.read_browser.project_mode();
-    if controls_area.width >= 68 {
+    if controls_area.width >= 67 {
         let segments = [
             (" PROJECTS ", None),
             (
@@ -2779,7 +2779,6 @@ fn render_history_style_controls(frame: &mut Frame<'_>, area: Rect, state: &mut 
                     ProjectViewMode::Custom,
                 )),
             ),
-            (" ", None),
             (" STYLE ", None),
             (
                 " CLASS ",
@@ -2800,7 +2799,6 @@ fn render_history_style_controls(frame: &mut Frame<'_>, area: Rect, state: &mut 
             pill("DEEP ", mode == ProjectViewMode::Deep),
             pill("FULL", mode == ProjectViewMode::Full),
             pill("CUSTOM", mode == ProjectViewMode::Custom),
-            Span::raw(" "),
             control_group_label("STYLE"),
             pill("CLASS", state.display_style == DisplayStyle::Classic),
             pill("SCOMP", state.display_style == DisplayStyle::SystemCompact),
