@@ -16,7 +16,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph, Wrap},
     Frame,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -42,7 +42,16 @@ enum BrowserClickTarget {
 #[derive(Debug, Clone, Copy, Default)]
 struct UiLayout {
     project_list_area: Rect,
+    project_scrollbar_area: Rect,
     session_list_area: Rect,
+    session_scrollbar_area: Rect,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListScrollbarClick {
+    Previous,
+    Next,
+    Offset(usize),
 }
 
 #[derive(Debug)]
@@ -586,6 +595,9 @@ fn handle_mouse_event(state: &mut BrowserState, mouse: MouseEvent) -> bool {
         }
         MouseEventKind::Down(MouseButton::Left) => {
             let now = Instant::now();
+            if rect_contains(state.layout.project_scrollbar_area, mouse.column, mouse.row) {
+                return click_project_scrollbar(state, mouse.row);
+            }
             if rect_contains(state.layout.project_list_area, mouse.column, mouse.row) {
                 if let Some(index) = click_project_row(state, mouse.row) {
                     let content = inner_rect(state.layout.project_list_area);
@@ -602,6 +614,9 @@ fn handle_mouse_event(state: &mut BrowserState, mouse: MouseEvent) -> bool {
                     return true;
                 }
             }
+            if rect_contains(state.layout.session_scrollbar_area, mouse.column, mouse.row) {
+                return click_session_scrollbar(state, mouse.row);
+            }
             if rect_contains(state.layout.session_list_area, mouse.column, mouse.row) {
                 if let Some(target) = click_session_row(state, mouse.row) {
                     let double_click = state.register_click(target, now);
@@ -617,6 +632,53 @@ fn handle_mouse_event(state: &mut BrowserState, mouse: MouseEvent) -> bool {
         }
         _ => false,
     }
+}
+
+fn click_project_scrollbar(state: &mut BrowserState, row: u16) -> bool {
+    let total = state.catalog.projects.len();
+    let visible = usize::from(state.layout.project_scrollbar_area.height);
+    let Some(action) =
+        list_scrollbar_click(state.layout.project_scrollbar_area, row, total, visible)
+    else {
+        return false;
+    };
+    match action {
+        ListScrollbarClick::Previous => move_selection(state, -1),
+        ListScrollbarClick::Next => move_selection(state, 1),
+        ListScrollbarClick::Offset(offset) => {
+            *state.project_state.offset_mut() = offset;
+            state
+                .project_state
+                .select(Some(offset.min(total.saturating_sub(1))));
+            sync_session_selection(state);
+        }
+    }
+    true
+}
+
+fn click_session_scrollbar(state: &mut BrowserState, row: u16) -> bool {
+    let total = state
+        .selected_project()
+        .map(|project| project.sessions.len().saturating_add(1))
+        .unwrap_or(1);
+    let visible = usize::from(state.layout.session_scrollbar_area.height);
+    let Some(action) =
+        list_scrollbar_click(state.layout.session_scrollbar_area, row, total, visible)
+    else {
+        return false;
+    };
+    match action {
+        ListScrollbarClick::Previous => move_selection(state, -1),
+        ListScrollbarClick::Next => move_selection(state, 1),
+        ListScrollbarClick::Offset(offset) => {
+            *state.session_state.offset_mut() = offset;
+            state
+                .session_state
+                .select(Some(offset.min(total.saturating_sub(1))));
+            try_load_selected_session_detail(state);
+        }
+    }
+    true
 }
 
 fn move_selection(state: &mut BrowserState, delta: isize) {
@@ -932,11 +994,24 @@ fn render_projects_view(
         })
         .collect::<Vec<_>>();
 
+    let project_scrollbar_area = list_scrollbar_area(columns[0], items.len());
+    let list_padding = if project_scrollbar_area.width > 0 {
+        Padding {
+            left: 0,
+            right: 2,
+            top: 0,
+            bottom: 0,
+        }
+    } else {
+        Padding::ZERO
+    };
+
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(" Projects ")
+                .padding(list_padding)
                 .border_style(active_border(state.view == ViewMode::Projects)),
         )
         .highlight_style(
@@ -947,6 +1022,13 @@ fn render_projects_view(
         )
         .highlight_symbol(">> ");
     frame.render_stateful_widget(list, columns[0], &mut state.project_state);
+    render_list_scrollbar(
+        frame,
+        project_scrollbar_area,
+        state.catalog.projects.len(),
+        usize::from(project_scrollbar_area.height),
+        state.project_state.offset(),
+    );
 
     let detail_text =
         render_project_detail(state.selected_project(), usage, usage_error, formatter);
@@ -963,7 +1045,9 @@ fn render_projects_view(
 
     UiLayout {
         project_list_area: columns[0],
+        project_scrollbar_area,
         session_list_area: Rect::default(),
+        session_scrollbar_area: Rect::default(),
     }
 }
 
@@ -998,11 +1082,23 @@ fn render_sessions_view(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let session_scrollbar_area = list_scrollbar_area(columns[0], items.len());
+    let list_padding = if session_scrollbar_area.width > 0 {
+        Padding {
+            left: 0,
+            right: 2,
+            top: 0,
+            bottom: 0,
+        }
+    } else {
+        Padding::ZERO
+    };
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(" Sessions ")
+                .padding(list_padding)
                 .border_style(active_border(true)),
         )
         .highlight_style(
@@ -1013,6 +1109,16 @@ fn render_sessions_view(
         )
         .highlight_symbol(">> ");
     frame.render_stateful_widget(list, columns[0], &mut state.session_state);
+    render_list_scrollbar(
+        frame,
+        session_scrollbar_area,
+        state
+            .selected_project()
+            .map(|project| project.sessions.len().saturating_add(1))
+            .unwrap_or(1),
+        usize::from(session_scrollbar_area.height),
+        state.session_state.offset(),
+    );
 
     let detail_text = render_session_detail(
         state.selected_session(),
@@ -1032,8 +1138,100 @@ fn render_sessions_view(
 
     UiLayout {
         project_list_area: Rect::default(),
+        project_scrollbar_area: Rect::default(),
         session_list_area: columns[0],
+        session_scrollbar_area,
     }
+}
+
+fn list_scrollbar_area(area: Rect, total: usize) -> Rect {
+    let visible = usize::from(area.height.saturating_sub(2));
+    if total <= visible || area.width < 5 || area.height < 5 {
+        return Rect::default();
+    }
+    Rect::new(
+        area.x.saturating_add(area.width.saturating_sub(2)),
+        area.y.saturating_add(1),
+        1,
+        area.height.saturating_sub(2),
+    )
+}
+
+fn render_list_scrollbar(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    total: usize,
+    visible: usize,
+    offset: usize,
+) {
+    if area.width == 0 || area.height < 3 || total <= visible || visible == 0 {
+        return;
+    }
+    let track_length = usize::from(area.height.saturating_sub(2));
+    let max_offset = total.saturating_sub(visible);
+    let thumb_length = track_length
+        .saturating_mul(visible)
+        .saturating_add(total.saturating_sub(1))
+        .checked_div(total.max(1))
+        .unwrap_or(1)
+        .clamp(1, track_length);
+    let thumb_travel = track_length.saturating_sub(thumb_length);
+    let thumb_start = offset
+        .min(max_offset)
+        .saturating_mul(thumb_travel)
+        .checked_div(max_offset.max(1))
+        .unwrap_or(0);
+    let bottom = area.y.saturating_add(area.height.saturating_sub(1));
+    let buf = frame.buffer_mut();
+    for (y, ch) in [(area.y, '^'), (bottom, 'v')] {
+        if let Some(cell) = buf.cell_mut((area.x, y)) {
+            cell.set_char(ch).set_style(
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            );
+        }
+    }
+    for index in 0..track_length {
+        let y = area.y.saturating_add(index as u16).saturating_add(1);
+        let in_thumb = index >= thumb_start && index < thumb_start.saturating_add(thumb_length);
+        if let Some(cell) = buf.cell_mut((area.x, y)) {
+            if in_thumb {
+                cell.set_char(' ')
+                    .set_style(Style::default().bg(Color::White));
+            } else {
+                cell.set_char('.')
+                    .set_style(Style::default().fg(Color::DarkGray));
+            }
+        }
+    }
+}
+
+fn list_scrollbar_click(
+    area: Rect,
+    row: u16,
+    total: usize,
+    visible: usize,
+) -> Option<ListScrollbarClick> {
+    if area.width == 0 || area.height < 3 || row < area.y || total <= visible || visible == 0 {
+        return None;
+    }
+    let relative = row.saturating_sub(area.y);
+    if relative == 0 {
+        return Some(ListScrollbarClick::Previous);
+    }
+    if relative >= area.height.saturating_sub(1) {
+        return Some(ListScrollbarClick::Next);
+    }
+    let track_index = usize::from(relative.saturating_sub(1));
+    let track_length = usize::from(area.height.saturating_sub(2));
+    let max_offset = total.saturating_sub(visible);
+    let offset = if track_length <= 1 {
+        0
+    } else {
+        track_index.saturating_mul(max_offset) / track_length.saturating_sub(1)
+    };
+    Some(ListScrollbarClick::Offset(offset.min(max_offset)))
 }
 
 fn render_project_detail(
@@ -1503,7 +1701,8 @@ fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
 mod tests {
     use super::{
         build_discovery_catalog, header_line_area, history_depth_controls_area,
-        history_style_controls_area, BrowserClickTarget, BrowserState, DOUBLE_CLICK_WINDOW,
+        history_style_controls_area, list_scrollbar_area, list_scrollbar_click, BrowserClickTarget,
+        BrowserState, ListScrollbarClick, DOUBLE_CLICK_WINDOW,
     };
     use crate::read::catalog::{
         CatalogSnapshot, ProjectCheckout, ProjectViewMode, SessionProjectLink, SOURCE_REPOSITORY,
@@ -1571,6 +1770,30 @@ mod tests {
         assert_eq!(
             history_style_controls_area(Rect::new(2, 1, 20, 3)),
             Rect::default()
+        );
+    }
+
+    #[test]
+    fn list_scrollbar_reserves_the_right_inner_column_only_when_needed() {
+        let area = Rect::new(4, 5, 30, 12);
+        assert_eq!(list_scrollbar_area(area, 20), Rect::new(32, 6, 1, 10));
+        assert_eq!(list_scrollbar_area(area, 10), Rect::default());
+    }
+
+    #[test]
+    fn list_scrollbar_clicks_map_arrows_and_track_to_offsets() {
+        let area = Rect::new(32, 6, 1, 10);
+        assert_eq!(
+            list_scrollbar_click(area, 6, 20, 10),
+            Some(ListScrollbarClick::Previous)
+        );
+        assert_eq!(
+            list_scrollbar_click(area, 15, 20, 10),
+            Some(ListScrollbarClick::Next)
+        );
+        assert_eq!(
+            list_scrollbar_click(area, 14, 20, 10),
+            Some(ListScrollbarClick::Offset(10))
         );
     }
 
