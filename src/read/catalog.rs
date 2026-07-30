@@ -19,6 +19,7 @@ const CATALOG_SCHEMA_VERSION: i64 = 1;
 const MAX_PATH_BYTES: usize = 4096;
 const MAX_COMMAND_BYTES: usize = 64 * 1024;
 const MAX_RELATED_PROJECTS_PER_SESSION: usize = 64;
+const MAX_DIRECTORIES_SCANNED: usize = 200_000;
 const EVIDENCE_PASS_BYTES: u64 = 256 * 1024 * 1024;
 
 pub(crate) const SOURCE_OWNER: u32 = 1 << 0;
@@ -476,12 +477,11 @@ where
     };
     let _ = root_meta;
     let mut queue = VecDeque::from([(root.to_path_buf(), 0u8)]);
-    let max_directories = max_candidates.saturating_mul(5).clamp(10_000, 50_000);
     while let Some((dir, depth)) = queue.pop_front() {
         if cancelled.load(Ordering::Relaxed) {
             anyhow::bail!("project catalog scan cancelled");
         }
-        if *directory_count >= max_directories || out.len() >= max_candidates {
+        if *directory_count >= MAX_DIRECTORIES_SCANNED || out.len() >= max_candidates {
             *truncated = true;
             break;
         }
